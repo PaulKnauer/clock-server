@@ -1,0 +1,116 @@
+replicaCount: 1
+
+image:
+  repository: clock-server
+  tag: local
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  automount: false
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: "traefik"
+  annotations: {}
+  hosts:
+    - host: clock-server.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+probes:
+  liveness:
+    path: /health
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  readiness:
+    path: /health
+    initialDelaySeconds: 3
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+
+auth:
+  existingSecret: ""
+  credentials: ""
+  legacyToken: ""
+  secretKeys:
+    credentials: API_AUTH_CREDENTIALS
+    token: API_AUTH_TOKEN
+
+config:
+  httpAddr: ":8080"
+  requireTLS: false
+  trustProxyTLS: true
+  readinessRequireAuth: false
+  maxBodyBytes: 65536
+  authFailLimitPerMin: 60
+
+  httpReadTimeoutMs: 10000
+  httpWriteTimeoutMs: 10000
+  httpIdleTimeoutMs: 60000
+  httpReadHeaderTimeoutMs: 5000
+  httpShutdownTimeoutMs: 15000
+
+  enabledSenders: ""
+
+  mqtt:
+    brokerURL: ""
+    clientID: ""
+    username: ""
+    password: ""
+    topicPrefix: "clocks/commands"
+    qos: 1
+    retained: false
+    connectRetry: true
+    tlsInsecureSkipVerify: false
+    allowInsecureTLSVerify: false
+    allowInsecureMQTT: false
+
+  rest:
+    baseURL: ""
+    token: ""
+    timeoutMs: 5000
+    healthPath: ""
+    allowInsecureHTTP: false

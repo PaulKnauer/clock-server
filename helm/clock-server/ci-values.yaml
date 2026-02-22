@@ -1,0 +1,7 @@
+auth:
+  credentials: "ci|token|*"
+
+config:
+  enabledSenders: "mqtt"
+  mqtt:
+    brokerURL: "mqtt://broker:1883"

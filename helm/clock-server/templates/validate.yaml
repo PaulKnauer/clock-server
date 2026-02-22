@@ -1,0 +1,11 @@
+{{- if and (not .Values.auth.existingSecret) (not .Values.auth.credentials) (not .Values.auth.legacyToken) -}}
+{{- fail "Set auth.credentials/auth.legacyToken or auth.existingSecret (API auth is required)." -}}
+{{- end -}}
+
+{{- if and (regexMatch "(^|,\\s*)mqtt(\\s*,|$)" .Values.config.enabledSenders) (not .Values.config.mqtt.brokerURL) -}}
+{{- fail "config.mqtt.brokerURL is required when config.enabledSenders includes mqtt." -}}
+{{- end -}}
+
+{{- if and (regexMatch "(^|,\\s*)rest(\\s*,|$)" .Values.config.enabledSenders) (not .Values.config.rest.baseURL) -}}
+{{- fail "config.rest.baseURL is required when config.enabledSenders includes rest." -}}
+{{- end -}}

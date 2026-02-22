@@ -1,0 +1,23 @@
+Clock Server has been deployed.
+
+1) Check pods:
+   kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+2) Check service:
+   kubectl get svc -n {{ .Release.Namespace }} {{ include "clock-server.fullname" . }}
+
+{{- if .Values.ingress.enabled }}
+3) Ingress host(s):
+{{- range .Values.ingress.hosts }}
+   http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+3) Port-forward locally:
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "clock-server.fullname" . }} 8080:{{ .Values.service.port }}
+{{- end }}
+
+4) Send a test command (replace token):
+   curl -X POST http://localhost:8080/commands/messages \
+     -H 'Authorization: Bearer <token>' \
+     -H 'Content-Type: application/json' \
+     -d '{"deviceId":"clock-1","message":"hello","durationSeconds":5}'

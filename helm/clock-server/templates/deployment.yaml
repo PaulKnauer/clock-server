@@ -1,0 +1,145 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "clock-server.fullname" . }}
+  labels:
+    {{- include "clock-server.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "clock-server.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "clock-server.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "clock-server.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: HTTP_ADDR
+              value: {{ .Values.config.httpAddr | quote }}
+            - name: HTTP_READ_TIMEOUT_MS
+              value: {{ .Values.config.httpReadTimeoutMs | quote }}
+            - name: HTTP_WRITE_TIMEOUT_MS
+              value: {{ .Values.config.httpWriteTimeoutMs | quote }}
+            - name: HTTP_IDLE_TIMEOUT_MS
+              value: {{ .Values.config.httpIdleTimeoutMs | quote }}
+            - name: HTTP_READ_HEADER_TIMEOUT_MS
+              value: {{ .Values.config.httpReadHeaderTimeoutMs | quote }}
+            - name: HTTP_SHUTDOWN_TIMEOUT_MS
+              value: {{ .Values.config.httpShutdownTimeoutMs | quote }}
+            - name: REQUIRE_TLS
+              value: {{ .Values.config.requireTLS | quote }}
+            - name: TRUST_PROXY_TLS
+              value: {{ .Values.config.trustProxyTLS | quote }}
+            - name: READINESS_REQUIRE_AUTH
+              value: {{ .Values.config.readinessRequireAuth | quote }}
+            - name: MAX_BODY_BYTES
+              value: {{ .Values.config.maxBodyBytes | quote }}
+            - name: AUTH_FAIL_LIMIT_PER_MIN
+              value: {{ .Values.config.authFailLimitPerMin | quote }}
+            - name: ENABLED_SENDERS
+              value: {{ .Values.config.enabledSenders | quote }}
+            - name: MQTT_BROKER_URL
+              value: {{ .Values.config.mqtt.brokerURL | quote }}
+            - name: MQTT_CLIENT_ID
+              value: {{ .Values.config.mqtt.clientID | quote }}
+            - name: MQTT_USERNAME
+              value: {{ .Values.config.mqtt.username | quote }}
+            - name: MQTT_PASSWORD
+              value: {{ .Values.config.mqtt.password | quote }}
+            - name: MQTT_TOPIC_PREFIX
+              value: {{ .Values.config.mqtt.topicPrefix | quote }}
+            - name: MQTT_QOS
+              value: {{ .Values.config.mqtt.qos | quote }}
+            - name: MQTT_RETAINED
+              value: {{ .Values.config.mqtt.retained | quote }}
+            - name: MQTT_CONNECT_RETRY
+              value: {{ .Values.config.mqtt.connectRetry | quote }}
+            - name: MQTT_TLS_INSECURE_SKIP_VERIFY
+              value: {{ .Values.config.mqtt.tlsInsecureSkipVerify | quote }}
+            - name: ALLOW_INSECURE_TLS_VERIFY
+              value: {{ .Values.config.mqtt.allowInsecureTLSVerify | quote }}
+            - name: ALLOW_INSECURE_MQTT
+              value: {{ .Values.config.mqtt.allowInsecureMQTT | quote }}
+            - name: CLOCK_REST_BASE_URL
+              value: {{ .Values.config.rest.baseURL | quote }}
+            - name: CLOCK_REST_TOKEN
+              value: {{ .Values.config.rest.token | quote }}
+            - name: CLOCK_REST_TIMEOUT_MS
+              value: {{ .Values.config.rest.timeoutMs | quote }}
+            - name: CLOCK_REST_HEALTH_PATH
+              value: {{ .Values.config.rest.healthPath | quote }}
+            - name: ALLOW_INSECURE_DOWNSTREAM_HTTP
+              value: {{ .Values.config.rest.allowInsecureHTTP | quote }}
+            - name: API_AUTH_CREDENTIALS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "clock-server.authSecretName" . }}
+                  key: {{ .Values.auth.secretKeys.credentials }}
+                  optional: true
+            - name: API_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "clock-server.authSecretName" . }}
+                  key: {{ .Values.auth.secretKeys.token }}
+                  optional: true
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
