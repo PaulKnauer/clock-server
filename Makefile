@@ -28,9 +28,14 @@ fmt:
 mod:
 	$(GO) mod tidy
 
-.PHONY: test
-test:
+.PHONY: test unit-test cucumber-test
+test: unit-test cucumber-test
+
+unit-test:
 	$(GO) test $(PKGS)
+
+cucumber-test:
+	$(GO) test ./internal/api -run TestFeatures -v
 
 .PHONY: build
 build:
