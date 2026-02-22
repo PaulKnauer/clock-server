@@ -1,0 +1,29 @@
+# Binaries and build output
+bin/
+dist/
+build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go test and coverage artifacts
+*.test
+*.out
+coverage.out
+cover.out
+.gocache/
+.gomodcache/
+
+# Dependency directories (if used)
+vendor/
+
+# Local environment files
+.env
+.env.*
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/
