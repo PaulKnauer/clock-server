@@ -1,11 +1,11 @@
-# syntax=docker/dockerfile:1.7
-
 ARG GO_VERSION=1.24.2
 ARG ALPINE_VERSION=3.21
 ARG APP_UID=2000
 ARG APP_GID=2000
+ARG GO_IMAGE=golang:${GO_VERSION}-alpine
+ARG RUNTIME_IMAGE=alpine:${ALPINE_VERSION}
 
-FROM golang:${GO_VERSION}-alpine AS builder
+FROM ${GO_IMAGE} AS builder
 WORKDIR /src
 
 ARG TARGETOS
@@ -23,7 +23,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -trimpath -buildvcs=false -ldflags="-s -w" -o /out/server ./cmd/server
 
-FROM alpine:${ALPINE_VERSION} AS runtime
+FROM ${RUNTIME_IMAGE} AS runtime
 ARG APP_UID
 ARG APP_GID
 

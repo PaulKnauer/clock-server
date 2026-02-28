@@ -1,8 +1,13 @@
 GO ?= go
 PKGS := ./...
+BIN_DIR ?= bin
+CLOCKCTL_BIN ?= $(BIN_DIR)/clockctl
 IMAGE_NAME ?= clock-server
 IMAGE_TAG ?= 0.0.1
 IMAGE ?= $(IMAGE_NAME):$(IMAGE_TAG)
+GO_IMAGE ?= golang:1.24.2-alpine
+RUNTIME_IMAGE ?= alpine:3.21
+DOCKER_BUILD_ARGS ?= --build-arg GO_IMAGE=$(GO_IMAGE) --build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE)
 REGISTRY ?= 192.168.2.201:32000
 REGISTRY_REPO ?= $(IMAGE_NAME)
 REGISTRY_IMAGE ?= $(REGISTRY)/$(REGISTRY_REPO):$(IMAGE_TAG)
@@ -41,13 +46,18 @@ cucumber-test:
 build:
 	$(GO) build $(PKGS)
 
+.PHONY: build-clockctl
+build-clockctl:
+	mkdir -p $(BIN_DIR)
+	$(GO) build -o $(CLOCKCTL_BIN) ./cmd/clockctl
+
 .PHONY: clean
 clean:
 	rm -rf bin dist build
 
 .PHONY: docker-build
 docker-build:
-	docker build -t $(IMAGE) .
+	docker build $(DOCKER_BUILD_ARGS) -t $(IMAGE) .
 
 .PHONY: docker-login
 docker-login:
