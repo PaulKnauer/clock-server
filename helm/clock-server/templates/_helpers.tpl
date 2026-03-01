@@ -47,3 +47,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s-auth" (include "clock-server.fullname" .) -}}
 {{- end -}}
 {{- end -}}
+
+{{- define "clock-server.downstreamSecretName" -}}
+{{- if .Values.downstream.existingSecret -}}
+{{- .Values.downstream.existingSecret -}}
+{{- else -}}
+{{- printf "%s-downstream" (include "clock-server.fullname" .) -}}
+{{- end -}}
+{{- end -}}
