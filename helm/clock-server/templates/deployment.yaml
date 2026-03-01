@@ -70,7 +70,11 @@ spec:
             - name: MQTT_USERNAME
               value: {{ .Values.config.mqtt.username | quote }}
             - name: MQTT_PASSWORD
-              value: {{ .Values.config.mqtt.password | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "clock-server.downstreamSecretName" . }}
+                  key: {{ .Values.downstream.secretKeys.mqttPassword }}
+                  optional: true
             - name: MQTT_TOPIC_PREFIX
               value: {{ .Values.config.mqtt.topicPrefix | quote }}
             - name: MQTT_QOS
