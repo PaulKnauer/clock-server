@@ -1,6 +1,8 @@
 # Clock Command Dispatcher
 
-A Go microservice that dispatches smart clock commands over MQTT and/or REST using Ports & Adapters (Hexagonal) architecture.
+**Clock Command Dispatcher** is a production-ready Go microservice that acts as a secure, centralized command gateway for smart clock devices. Clients send commands — set alarms, display messages, or adjust brightness — via a REST API; the server validates each command against its domain rules and routes it to one or more downstream transports (MQTT broker, REST backend, or both).
+
+Built with Hexagonal (Ports & Adapters) architecture, the dispatcher cleanly isolates domain logic from transport concerns, making it straightforward to add new adapters. It ships with Bearer token authentication with per-credential device scoping, TLS enforced on all connections by default, per-IP auth-failure rate limiting, and 12-factor configuration via environment variables. A companion CLI (`clockctl`) allows direct command dispatch from the terminal. The service is designed for production Kubernetes deployments, with a hardened Docker image (non-root user, read-only filesystem) and a Helm chart enforcing strong security defaults.
 
 ## Table of Contents
 
