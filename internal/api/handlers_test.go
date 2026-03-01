@@ -268,3 +268,55 @@ func TestAuthFailureRateLimit(t *testing.T) {
 		t.Fatalf("expected second status 429, got %d", rr2.Code)
 	}
 }
+
+func TestSharedIPThrottlingDoesNotBlockOtherTokens(t *testing.T) {
+	// Two callers behind the same NAT IP use different tokens.
+	// One attacker fails auth repeatedly; the legitimate user must
+	// NOT be collaterally blocked (no 429).
+	dispatcher := application.NewCommandDispatcher(&stubSender{})
+	validToken := "valid-secret-token"
+	h := NewHandler(
+		dispatcher,
+		[]security.Credential{{ID: "legit", Token: validToken, Devices: []string{"*"}}},
+		false,
+		false,
+		true,
+		64*1024,
+		2, // allow only 2 failures per key per minute
+	)
+
+	sharedIP := "198.51.100.1:9999"
+	attackerToken := "wrong-token-attacker"
+	router := h.Routes()
+
+	// Attacker: fail auth 3 times with a bad token from the shared IP.
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+		req.RemoteAddr = sharedIP
+		req.Header.Set("Authorization", "Bearer "+attackerToken)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		// First two should be 401, third should be 429.
+		if i < 2 && rr.Code != http.StatusUnauthorized {
+			t.Fatalf("attacker request %d: expected 401, got %d", i, rr.Code)
+		}
+		if i == 2 && rr.Code != http.StatusTooManyRequests {
+			t.Fatalf("attacker request %d: expected 429, got %d", i, rr.Code)
+		}
+	}
+
+	// Legitimate user: same source IP, different (valid) token.
+	// Must NOT receive 429.
+	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	req.RemoteAddr = sharedIP
+	req.Header.Set("Authorization", "Bearer "+validToken)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code == http.StatusTooManyRequests {
+		t.Fatalf("legitimate user behind shared IP got 429 — collateral DoS not fixed")
+	}
+	if rr.Code != http.StatusOK {
+		t.Fatalf("legitimate user expected 200, got %d", rr.Code)
+	}
+}

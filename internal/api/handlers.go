@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -288,22 +290,38 @@ func (h *Handler) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		remoteIP := clientIP(r)
-		if h.authFailureRateLimiter.IsBlocked(remoteIP) {
+
+		authHeader := r.Header.Get("Authorization")
+		const prefix = "Bearer "
+
+		// Build a rate-limit key that incorporates both IP and a hash of
+		// the presented credential. This prevents one bad actor behind a
+		// shared IP (NAT / reverse-proxy) from blocking all other users
+		// on that IP.  When no token is presented we fall back to
+		// IP-only keying to limit unauthenticated probing.
+		rateLimitKey := remoteIP
+		token := ""
+		if strings.HasPrefix(authHeader, prefix) {
+			token = strings.TrimSpace(strings.TrimPrefix(authHeader, prefix))
+		}
+		if token != "" {
+			hash := sha256.Sum256([]byte(token))
+			rateLimitKey = remoteIP + ":" + hex.EncodeToString(hash[:4])
+		}
+
+		if h.authFailureRateLimiter.IsBlocked(rateLimitKey) {
 			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many auth failures"})
 			return
 		}
 
-		authHeader := r.Header.Get("Authorization")
-		const prefix = "Bearer "
-		if !strings.HasPrefix(authHeader, prefix) {
-			h.authFailureRateLimiter.RecordFailure(remoteIP)
+		if token == "" {
+			h.authFailureRateLimiter.RecordFailure(rateLimitKey)
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
-		token := strings.TrimSpace(strings.TrimPrefix(authHeader, prefix))
 		principal, ok := h.lookupCredential(token)
 		if !ok {
-			h.authFailureRateLimiter.RecordFailure(remoteIP)
+			h.authFailureRateLimiter.RecordFailure(rateLimitKey)
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
