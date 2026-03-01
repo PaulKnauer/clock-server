@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "container-use": {
-      "command": "container-use",
+      "command": "/opt/homebrew/bin/container-use",
       "args": ["stdio"],
       "type": "stdio"
     }
