@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"strconv"
@@ -81,6 +82,7 @@ func LoadFromEnv() (Config, error) {
 	legacyToken := strings.TrimSpace(os.Getenv("API_AUTH_TOKEN"))
 	if len(creds) == 0 && legacyToken != "" {
 		creds = []security.Credential{{ID: "legacy", Token: legacyToken, Devices: []string{"*"}}}
+		log.Printf("WARNING: using legacy API_AUTH_TOKEN with wildcard device scope; migrate to API_AUTH_CREDENTIALS for scoped access")
 	}
 	if len(creds) == 0 {
 		return Config{}, fmt.Errorf("API_AUTH_CREDENTIALS or API_AUTH_TOKEN is required")

@@ -70,7 +70,11 @@ spec:
             - name: MQTT_USERNAME
               value: {{ .Values.config.mqtt.username | quote }}
             - name: MQTT_PASSWORD
-              value: {{ .Values.config.mqtt.password | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "clock-server.authSecretName" . }}
+                  key: {{ .Values.auth.secretKeys.mqttPassword }}
+                  optional: true
             - name: MQTT_TOPIC_PREFIX
               value: {{ .Values.config.mqtt.topicPrefix | quote }}
             - name: MQTT_QOS
@@ -88,7 +92,11 @@ spec:
             - name: CLOCK_REST_BASE_URL
               value: {{ .Values.config.rest.baseURL | quote }}
             - name: CLOCK_REST_TOKEN
-              value: {{ .Values.config.rest.token | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "clock-server.authSecretName" . }}
+                  key: {{ .Values.auth.secretKeys.restToken }}
+                  optional: true
             - name: CLOCK_REST_TIMEOUT_MS
               value: {{ .Values.config.rest.timeoutMs | quote }}
             - name: CLOCK_REST_HEALTH_PATH

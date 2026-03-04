@@ -2,9 +2,28 @@ package domain
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"time"
 )
+
+// deviceIDPattern defines the strict allowlist for device identifiers.
+// Only alphanumeric characters, hyphens, and underscores are permitted,
+// with a length between 1 and 64 characters. This prevents MQTT topic
+// injection via characters like /, +, #, or path traversal sequences.
+var deviceIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+
+// ValidateDeviceID checks that a device ID matches the strict allowlist.
+func ValidateDeviceID(id string) error {
+	trimmed := strings.TrimSpace(id)
+	if trimmed == "" {
+		return NewValidationError("device id is required")
+	}
+	if !deviceIDPattern.MatchString(trimmed) {
+		return NewValidationError("device id contains invalid characters")
+	}
+	return nil
+}
 
 // ClockCommand defines the behavior every command sent to a smart clock must implement.
 type ClockCommand interface {
@@ -38,8 +57,8 @@ func (c SetAlarmCommand) CommandType() string {
 
 // Validate verifies command invariants.
 func (c SetAlarmCommand) Validate() error {
-	if strings.TrimSpace(c.DeviceID) == "" {
-		return NewValidationError("device id is required")
+	if err := ValidateDeviceID(c.DeviceID); err != nil {
+		return err
 	}
 	if c.AlarmTime.IsZero() {
 		return NewValidationError("alarm time is required")
@@ -74,8 +93,8 @@ func (c DisplayMessageCommand) CommandType() string {
 
 // Validate verifies command invariants.
 func (c DisplayMessageCommand) Validate() error {
-	if strings.TrimSpace(c.DeviceID) == "" {
-		return NewValidationError("device id is required")
+	if err := ValidateDeviceID(c.DeviceID); err != nil {
+		return err
 	}
 	if strings.TrimSpace(c.Message) == "" {
 		return NewValidationError("message is required")
@@ -112,8 +131,8 @@ func (c SetBrightnessCommand) CommandType() string {
 
 // Validate verifies command invariants.
 func (c SetBrightnessCommand) Validate() error {
-	if strings.TrimSpace(c.DeviceID) == "" {
-		return NewValidationError("device id is required")
+	if err := ValidateDeviceID(c.DeviceID); err != nil {
+		return err
 	}
 	if c.Level < 0 || c.Level > 100 {
 		return NewValidationError("brightness level must be between 0 and 100")

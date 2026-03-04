@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -318,5 +319,98 @@ func TestSharedIPThrottlingDoesNotBlockOtherTokens(t *testing.T) {
 	}
 	if rr.Code != http.StatusOK {
 		t.Fatalf("legitimate user expected 200, got %d", rr.Code)
+	}
+}
+
+// --- Fix: X-Request-Id sanitization ---
+
+func TestRequestIDSanitization(t *testing.T) {
+	h := newTestHandler(&stubSender{})
+	router := h.Routes()
+
+	tests := []struct {
+		name     string
+		input    string
+		wantMax  int
+		wantSafe bool // no control chars
+	}{
+		{"normal", "abc-123", 7, true},
+		{"too long", strings.Repeat("x", 100), maxRequestIDLen, true},
+		{"control chars", "abc\r\ndef\x00ghi", 0, true},
+		{"empty generates auto", "", 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/health", nil)
+			if tt.input != "" {
+				req.Header.Set("X-Request-Id", tt.input)
+			}
+			rr := httptest.NewRecorder()
+			router.ServeHTTP(rr, req)
+
+			got := rr.Header().Get("X-Request-Id")
+			if got == "" {
+				t.Fatal("expected X-Request-Id in response")
+			}
+			if tt.wantMax > 0 && len(got) > tt.wantMax {
+				t.Fatalf("request ID too long: got %d, want max %d", len(got), tt.wantMax)
+			}
+			for _, c := range got {
+				if c < 32 {
+					t.Fatalf("response X-Request-Id contains control char %d", c)
+				}
+			}
+		})
+	}
+}
+
+// --- Fix: /health enforces TLS ---
+
+func TestHealthEnforcesTLS(t *testing.T) {
+	dispatcher := application.NewCommandDispatcher(&stubSender{})
+	h := NewHandler(
+		dispatcher,
+		[]security.Credential{{ID: "test", Token: "test-token", Devices: []string{"*"}}},
+		false,
+		true, // requireTLS
+		true,
+		64*1024,
+		100,
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rr := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUpgradeRequired {
+		t.Fatalf("expected /health to require TLS (426), got %d", rr.Code)
+	}
+}
+
+// --- Fix: rate-limiter bounded map ---
+
+func TestRateLimiterEvictsAtCapacity(t *testing.T) {
+	lim := newAuthFailureLimiter(5)
+
+	// Fill to capacity with unique keys.
+	for i := 0; i < maxLimiterEntries; i++ {
+		lim.RecordFailure(fmt.Sprintf("key-%d", i))
+	}
+
+	if len(lim.entries) != maxLimiterEntries {
+		t.Fatalf("expected %d entries, got %d", maxLimiterEntries, len(lim.entries))
+	}
+
+	// Adding one more should trigger eviction and stay within bounds.
+	lim.RecordFailure("overflow-key")
+
+	if len(lim.entries) > maxLimiterEntries {
+		t.Fatalf("entries exceeded cap: got %d, max %d", len(lim.entries), maxLimiterEntries)
+	}
+
+	// The new key must be present.
+	if _, ok := lim.entries["overflow-key"]; !ok {
+		t.Fatal("new key was not inserted after eviction")
 	}
 }

@@ -2,6 +2,8 @@ module github.com/paul/clock-server
 
 go 1.22
 
+toolchain go1.24.2
+
 require github.com/cucumber/godog v0.15.1
 
 require (

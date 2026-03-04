@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -268,19 +269,20 @@ func setSecurityHeaders(w http.ResponseWriter) {
 
 func (h *Handler) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestID := r.Header.Get("X-Request-Id")
+		requestID := sanitizeRequestID(r.Header.Get("X-Request-Id"))
 		if strings.TrimSpace(requestID) == "" {
 			requestID = fmt.Sprintf("req-%d", atomic.AddUint64(&h.requestCounter, 1))
 		}
 		w.Header().Set("X-Request-Id", requestID)
 
-		if r.URL.Path == "/health" {
-			next.ServeHTTP(w, r)
+		if h.requireTLS && !h.isSecureRequest(r) {
+			writeJSON(w, http.StatusUpgradeRequired, map[string]string{"error": "https required"})
 			return
 		}
 
-		if h.requireTLS && !h.isSecureRequest(r) {
-			writeJSON(w, http.StatusUpgradeRequired, map[string]string{"error": "https required"})
+		// /health is intentionally exempt from authentication but not from TLS enforcement
+		if r.URL.Path == "/health" {
+			next.ServeHTTP(w, r)
 			return
 		}
 
@@ -375,7 +377,7 @@ func (h *Handler) audit(r *http.Request, deviceID, commandType, result string) {
 		deviceID,
 		commandType,
 		result,
-		r.Header.Get("X-Request-Id"),
+		sanitizeRequestID(r.Header.Get("X-Request-Id")),
 	)
 }
 
@@ -386,6 +388,24 @@ func clientIP(r *http.Request) string {
 	}
 	return host
 }
+
+const maxRequestIDLen = 64
+
+func sanitizeRequestID(id string) string {
+	if len(id) > maxRequestIDLen {
+		id = id[:maxRequestIDLen]
+	}
+	var b strings.Builder
+	b.Grow(len(id))
+	for _, r := range id {
+		if r >= 32 {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+const maxLimiterEntries = 10000
 
 type authFailureLimiter struct {
 	mu      sync.Mutex
@@ -428,9 +448,44 @@ func (l *authFailureLimiter) RecordFailure(key string) {
 	now := time.Now()
 	entry, ok := l.entries[key]
 	if !ok || now.Sub(entry.windowStart) >= l.window {
+		l.evictIfNeeded(now)
 		l.entries[key] = authFailureEntry{windowStart: now, count: 1}
 		return
 	}
 	entry.count++
 	l.entries[key] = entry
+}
+
+// evictIfNeeded ensures the entries map stays within maxLimiterEntries.
+// It first removes expired entries, then evicts oldest if still at capacity.
+// Must be called with l.mu held.
+func (l *authFailureLimiter) evictIfNeeded(now time.Time) {
+	if len(l.entries) < maxLimiterEntries {
+		return
+	}
+
+	// First pass: remove expired entries.
+	for k, e := range l.entries {
+		if now.Sub(e.windowStart) >= l.window {
+			delete(l.entries, k)
+		}
+	}
+	if len(l.entries) < maxLimiterEntries {
+		return
+	}
+
+	// Second pass: evict oldest entries until under capacity.
+	type keyed struct {
+		key  string
+		time time.Time
+	}
+	all := make([]keyed, 0, len(l.entries))
+	for k, e := range l.entries {
+		all = append(all, keyed{k, e.windowStart})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].time.Before(all[j].time) })
+	toRemove := len(l.entries) - maxLimiterEntries + 1
+	for i := 0; i < toRemove && i < len(all); i++ {
+		delete(l.entries, all[i].key)
+	}
 }
