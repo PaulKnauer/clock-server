@@ -28,7 +28,7 @@ const (
 	behaviorInvalidConnAck                       // send garbage instead of CONNACK
 	behaviorCloseOnConnect                       // close connection immediately without sending anything
 	behaviorAcceptNoPubAck                       // send valid CONNACK but never send PUBACK (causes timeout on QoS 1)
-	behaviorCloseOnPublish                       // accept connection then close on first PUBLISH
+	behaviorCloseOnPublish                       // accept connection, send CONNACK, then immediately close so publish write fails
 )
 
 // mockBroker is a simple in-process TCP listener that behaves like a minimal MQTT broker.
@@ -39,7 +39,12 @@ type mockBroker struct {
 
 	mu      sync.Mutex
 	conns   []net.Conn
-	pubRecv [][]byte // raw payloads received from PUBLISH packets
+	pubRecv []publishRecord
+}
+
+type publishRecord struct {
+	payload []byte
+	topic   string
 }
 
 func newMockBroker(t *testing.T, behavior brokerBehavior) *mockBroker {
@@ -57,16 +62,6 @@ func (mb *mockBroker) addr() string {
 	return mb.ln.Addr().String()
 }
 
-func (mb *mockBroker) host() string {
-	h, _, _ := net.SplitHostPort(mb.ln.Addr().String())
-	return h
-}
-
-func (mb *mockBroker) port() string {
-	_, p, _ := net.SplitHostPort(mb.ln.Addr().String())
-	return p
-}
-
 func (mb *mockBroker) mqttURL() string {
 	return "mqtt://" + mb.addr()
 }
@@ -80,10 +75,21 @@ func (mb *mockBroker) close() {
 	}
 }
 
-func (mb *mockBroker) receivedPayloads() [][]byte {
+// waitForPublishes blocks until at least n payloads have been received or timeout.
+func (mb *mockBroker) waitForPublishes(n int, timeout time.Duration) []publishRecord {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		mb.mu.Lock()
+		got := len(mb.pubRecv)
+		mb.mu.Unlock()
+		if got >= n {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	mb.mu.Lock()
 	defer mb.mu.Unlock()
-	out := make([][]byte, len(mb.pubRecv))
+	out := make([]publishRecord, len(mb.pubRecv))
 	copy(out, mb.pubRecv)
 	return out
 }
@@ -109,34 +115,33 @@ func (mb *mockBroker) handleConn(conn net.Conn) {
 		return
 
 	case behaviorInvalidConnAck:
-		// Send garbage bytes
 		_, _ = conn.Write([]byte{0xFF, 0xFF, 0xFF, 0xFF})
 		return
 
 	case behaviorRejectConnAck:
-		// Read CONNECT packet (consume it)
-		_ = readMQTTPacket(conn)
-		// Send CONNACK with return code 5 (not authorized)
+		_ = readRawMQTTPacket(conn)
 		_, _ = conn.Write([]byte{0x20, 0x02, 0x00, 0x05})
 		return
 
-	case behaviorAccept, behaviorAcceptNoPubAck, behaviorCloseOnPublish:
-		// Read CONNECT packet
-		_ = readMQTTPacket(conn)
-		// Send valid CONNACK
+	case behaviorCloseOnPublish:
+		// Read CONNECT, send CONNACK, then close immediately.
+		// The client will get a connection reset when it tries to write the PUBLISH.
+		_ = readRawMQTTPacket(conn)
+		_, _ = conn.Write([]byte{0x20, 0x02, 0x00, 0x00})
+		// Force a TCP RST by setting linger=0 before closing
+		if tc, ok := conn.(*net.TCPConn); ok {
+			_ = tc.SetLinger(0)
+		}
+		return
+
+	case behaviorAccept, behaviorAcceptNoPubAck:
+		// Read CONNECT, send CONNACK
+		_ = readRawMQTTPacket(conn)
 		_, _ = conn.Write([]byte{0x20, 0x02, 0x00, 0x00})
 
-		if mb.behavior == behaviorCloseOnPublish {
-			// Close connection immediately so the next write by the client fails
-			return
-		}
-
-		// Loop reading PUBLISH packets and sending PUBACKs (if QoS 1)
+		// Loop reading PUBLISH packets
 		for {
-			pkt := readMQTTPacket(conn)
-			if pkt == nil {
-				return
-			}
+			pkt := readRawMQTTPacket(conn)
 			if len(pkt) == 0 {
 				return
 			}
@@ -146,15 +151,12 @@ func (mb *mockBroker) handleConn(conn net.Conn) {
 			}
 			qos := (fixedHeader >> 1) & 0x03
 
-			// Extract topic length + payload for recording
-			if len(pkt) < 3 {
+			// Parse the remaining bytes after the fixed header + varint
+			offset := 1 + varIntLen(pkt[1:])
+			if offset >= len(pkt) {
 				continue
 			}
-			remainingStart := 1 + varIntLen(pkt[1:])
-			if remainingStart >= len(pkt) {
-				continue
-			}
-			remaining := pkt[remainingStart:]
+			remaining := pkt[offset:]
 
 			if len(remaining) < 2 {
 				continue
@@ -163,20 +165,24 @@ func (mb *mockBroker) handleConn(conn net.Conn) {
 			if len(remaining) < 2+topicLen {
 				continue
 			}
-			offset := 2 + topicLen
+			topic := string(remaining[2 : 2+topicLen])
+			bodyOff := 2 + topicLen
 
 			var packetID uint16
 			if qos > 0 {
-				if len(remaining) < offset+2 {
+				if len(remaining) < bodyOff+2 {
 					continue
 				}
-				packetID = binary.BigEndian.Uint16(remaining[offset : offset+2])
-				offset += 2
+				packetID = binary.BigEndian.Uint16(remaining[bodyOff : bodyOff+2])
+				bodyOff += 2
 			}
 
-			payload := remaining[offset:]
+			payload := remaining[bodyOff:]
+			payloadCopy := make([]byte, len(payload))
+			copy(payloadCopy, payload)
+
 			mb.mu.Lock()
-			mb.pubRecv = append(mb.pubRecv, payload)
+			mb.pubRecv = append(mb.pubRecv, publishRecord{payload: payloadCopy, topic: topic})
 			mb.mu.Unlock()
 
 			if qos == 1 && mb.behavior != behaviorAcceptNoPubAck {
@@ -190,34 +196,30 @@ func (mb *mockBroker) handleConn(conn net.Conn) {
 	}
 }
 
-// readMQTTPacket reads one complete MQTT packet from r.
-// Returns nil on error.
-func readMQTTPacket(r io.Reader) []byte {
-	_ = r.(*net.TCPConn) // type assertion only used to guard
-	return readMQTTPacketFromReader(r)
-}
-
-func readMQTTPacketFromReader(r io.Reader) []byte {
+// readRawMQTTPacket reads one complete MQTT packet from r.
+// Returns nil/empty on error.
+func readRawMQTTPacket(r io.Reader) []byte {
 	header := make([]byte, 1)
 	if _, err := io.ReadFull(r, header); err != nil {
 		return nil
 	}
 
-	// Decode variable-length remaining-length
 	var remaining int
-	var multiplier int = 1
+	multiplier := 1
+	varIntBytes := make([]byte, 0, 4)
 	for {
 		b := make([]byte, 1)
 		if _, err := io.ReadFull(r, b); err != nil {
 			return nil
 		}
+		varIntBytes = append(varIntBytes, b[0])
 		remaining += int(b[0]&0x7F) * multiplier
 		multiplier *= 128
 		if b[0]&0x80 == 0 {
 			break
 		}
 		if multiplier > 128*128*128 {
-			return nil // malformed
+			return nil
 		}
 	}
 
@@ -228,13 +230,14 @@ func readMQTTPacketFromReader(r io.Reader) []byte {
 		}
 	}
 
-	result := make([]byte, 1+remaining)
+	result := make([]byte, 1+len(varIntBytes)+remaining)
 	result[0] = header[0]
-	copy(result[1:], body)
+	copy(result[1:], varIntBytes)
+	copy(result[1+len(varIntBytes):], body)
 	return result
 }
 
-// varIntLen returns how many bytes are used by the variable-length integer starting at b.
+// varIntLen returns how many bytes the variable-length integer starting at b occupies.
 func varIntLen(b []byte) int {
 	for i, v := range b {
 		if v&0x80 == 0 {
@@ -393,7 +396,7 @@ func TestParseBrokerURL_InsecureMQTTBlocked(t *testing.T) {
 }
 
 func TestParseBrokerURL_InsecureMQTTAllowed(t *testing.T) {
-	host, port, tls, err := parseBrokerURL("mqtt://broker.example.com:1883", true)
+	host, port, tlsOn, err := parseBrokerURL("mqtt://broker.example.com:1883", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -403,7 +406,7 @@ func TestParseBrokerURL_InsecureMQTTAllowed(t *testing.T) {
 	if port != "1883" {
 		t.Errorf("port = %q, want %q", port, "1883")
 	}
-	if tls {
+	if tlsOn {
 		t.Error("expected tlsEnabled=false for mqtt://")
 	}
 }
@@ -518,13 +521,12 @@ func TestNewSender_TLSInsecureSkipVerifyWithoutAllowFlag(t *testing.T) {
 }
 
 func TestNewSender_TLSInsecureSkipVerifyWithAllowFlag(t *testing.T) {
-	// This should fail at the connection stage, not at config validation
+	// Should fail at dial stage, not at config validation
 	_, err := NewSender(Config{
-		BrokerURL:             "mqtts://127.0.0.1:19999", // nothing listening
+		BrokerURL:             "mqtts://127.0.0.1:19999",
 		TLSInsecureSkipVerify: true,
 		AllowInsecureTLS:      true,
 	})
-	// Should fail with a dial error, not a config validation error
 	if err == nil {
 		t.Fatal("expected a dial error")
 	}
@@ -539,7 +541,7 @@ func TestNewSender_DefaultTopicPrefix(t *testing.T) {
 	s, err := NewSender(Config{
 		BrokerURL:              mb.mqttURL(),
 		ClientID:               "test",
-		TopicPrefix:            "",  // should get default
+		TopicPrefix:            "", // should get default
 		AllowInsecureTransport: true,
 	})
 	if err != nil {
@@ -703,14 +705,15 @@ func TestSend_SetAlarm_QoS0(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	// Give broker goroutine time to record the payload
-	time.Sleep(20 * time.Millisecond)
-	payloads := mb.receivedPayloads()
-	if len(payloads) != 1 {
-		t.Fatalf("expected 1 payload, got %d", len(payloads))
+	records := mb.waitForPublishes(1, 500*time.Millisecond)
+	if len(records) != 1 {
+		t.Fatalf("expected 1 payload, got %d", len(records))
 	}
-	if !bytes.Contains(payloads[0], []byte("set_alarm")) {
-		t.Errorf("payload does not contain 'set_alarm': %s", payloads[0])
+	if !bytes.Contains(records[0].payload, []byte("set_alarm")) {
+		t.Errorf("payload does not contain 'set_alarm': %s", records[0].payload)
+	}
+	if !strings.Contains(records[0].topic, "clock-1") {
+		t.Errorf("topic does not contain device ID: %s", records[0].topic)
 	}
 }
 
@@ -733,10 +736,12 @@ func TestSend_SetAlarm_QoS1(t *testing.T) {
 		t.Fatalf("Send QoS 1: %v", err)
 	}
 
-	time.Sleep(20 * time.Millisecond)
-	payloads := mb.receivedPayloads()
-	if len(payloads) != 1 {
-		t.Fatalf("expected 1 payload, got %d", len(payloads))
+	records := mb.waitForPublishes(1, 500*time.Millisecond)
+	if len(records) != 1 {
+		t.Fatalf("expected 1 payload, got %d", len(records))
+	}
+	if !bytes.Contains(records[0].payload, []byte("set_alarm")) {
+		t.Errorf("payload missing 'set_alarm': %s", records[0].payload)
 	}
 }
 
@@ -755,16 +760,15 @@ func TestSend_DisplayMessage(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	time.Sleep(20 * time.Millisecond)
-	payloads := mb.receivedPayloads()
-	if len(payloads) != 1 {
-		t.Fatalf("expected 1 payload, got %d", len(payloads))
+	records := mb.waitForPublishes(1, 500*time.Millisecond)
+	if len(records) != 1 {
+		t.Fatalf("expected 1 payload, got %d", len(records))
 	}
-	if !bytes.Contains(payloads[0], []byte("display_message")) {
-		t.Errorf("payload missing 'display_message': %s", payloads[0])
+	if !bytes.Contains(records[0].payload, []byte("display_message")) {
+		t.Errorf("payload missing 'display_message': %s", records[0].payload)
 	}
-	if !bytes.Contains(payloads[0], []byte("hello")) {
-		t.Errorf("payload missing message text: %s", payloads[0])
+	if !bytes.Contains(records[0].payload, []byte("hello")) {
+		t.Errorf("payload missing message text: %s", records[0].payload)
 	}
 }
 
@@ -783,13 +787,12 @@ func TestSend_SetBrightness(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	time.Sleep(20 * time.Millisecond)
-	payloads := mb.receivedPayloads()
-	if len(payloads) != 1 {
-		t.Fatalf("expected 1 payload, got %d", len(payloads))
+	records := mb.waitForPublishes(1, 500*time.Millisecond)
+	if len(records) != 1 {
+		t.Fatalf("expected 1 payload, got %d", len(records))
 	}
-	if !bytes.Contains(payloads[0], []byte("set_brightness")) {
-		t.Errorf("payload missing 'set_brightness': %s", payloads[0])
+	if !bytes.Contains(records[0].payload, []byte("set_brightness")) {
+		t.Errorf("payload missing 'set_brightness': %s", records[0].payload)
 	}
 }
 
@@ -814,10 +817,9 @@ func TestSend_MultipleCommands(t *testing.T) {
 		}
 	}
 
-	time.Sleep(50 * time.Millisecond)
-	payloads := mb.receivedPayloads()
-	if len(payloads) != 3 {
-		t.Fatalf("expected 3 payloads, got %d", len(payloads))
+	records := mb.waitForPublishes(3, 500*time.Millisecond)
+	if len(records) != 3 {
+		t.Fatalf("expected 3 payloads, got %d", len(records))
 	}
 }
 
@@ -834,6 +836,10 @@ func TestSend_RetainedFlag(t *testing.T) {
 	cmd := domain.SetBrightnessCommand{DeviceID: "dev-r", Level: 50}
 	if err := s.Send(context.Background(), cmd); err != nil {
 		t.Fatalf("Send: %v", err)
+	}
+	records := mb.waitForPublishes(1, 500*time.Millisecond)
+	if len(records) != 1 {
+		t.Fatalf("expected 1 payload, got %d", len(records))
 	}
 }
 
@@ -881,7 +887,7 @@ func TestSend_CancelledContext(t *testing.T) {
 }
 
 func TestSend_PublishFailureThenReconnectWithRetry(t *testing.T) {
-	// Broker closes connection after CONNACK — simulates dropped connection
+	// Broker sends CONNACK then closes — all reconnect attempts will also get RST.
 	mb := newMockBroker(t, behaviorCloseOnPublish)
 	defer mb.close()
 
@@ -894,8 +900,6 @@ func TestSend_PublishFailureThenReconnectWithRetry(t *testing.T) {
 	defer s.Close()
 
 	cmd := domain.SetBrightnessCommand{DeviceID: "dev-1", Level: 50}
-	// With ConnectRetry=true the sender will try 3 times; all should fail since
-	// the broker always closes on publish.
 	err = s.Send(context.Background(), cmd)
 	if err == nil {
 		t.Fatal("expected error after all retry attempts")
@@ -954,8 +958,7 @@ func TestSend_QoS1_PubAckTimeout(t *testing.T) {
 }
 
 func TestSend_QoS1_PubAckPacketIDMismatch(t *testing.T) {
-	// Use a broker that sends a PUBACK with wrong packet ID.
-	mb := newMockBrokerWithCustomPubAck(t)
+	mb := newMockBrokerWithWrongPubAck(t)
 	defer mb.close()
 
 	s, err := newSenderWithBroker(t, mb, func(c *Config) { c.QoS = 1 })
@@ -974,8 +977,8 @@ func TestSend_QoS1_PubAckPacketIDMismatch(t *testing.T) {
 	}
 }
 
-// newMockBrokerWithCustomPubAck returns a broker that sends PUBACK with wrong ID.
-func newMockBrokerWithCustomPubAck(t *testing.T) *mockBroker {
+// newMockBrokerWithWrongPubAck returns a broker that sends PUBACK with wrong packet ID.
+func newMockBrokerWithWrongPubAck(t *testing.T) *mockBroker {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -983,26 +986,28 @@ func newMockBrokerWithCustomPubAck(t *testing.T) *mockBroker {
 	}
 	mb := &mockBroker{t: t, ln: ln, behavior: behaviorAccept}
 	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mb.mu.Lock()
+			mb.conns = append(mb.conns, conn)
+			mb.mu.Unlock()
+			go func(c net.Conn) {
+				defer c.Close()
+				// Read CONNECT, send CONNACK
+				_ = readRawMQTTPacket(c)
+				_, _ = c.Write([]byte{0x20, 0x02, 0x00, 0x00})
+				// Read PUBLISH, send PUBACK with wrong packet ID
+				_ = readRawMQTTPacket(c)
+				puback := make([]byte, 4)
+				puback[0] = 0x40
+				puback[1] = 0x02
+				binary.BigEndian.PutUint16(puback[2:], 0xFFFF) // wrong ID
+				_, _ = c.Write(puback)
+			}(conn)
 		}
-		mb.mu.Lock()
-		mb.conns = append(mb.conns, conn)
-		mb.mu.Unlock()
-		defer conn.Close()
-
-		// Read CONNECT, send CONNACK
-		_ = readMQTTPacketFromReader(conn)
-		_, _ = conn.Write([]byte{0x20, 0x02, 0x00, 0x00})
-
-		// Read PUBLISH, send PUBACK with wrong packet ID (0xFFFF)
-		_ = readMQTTPacketFromReader(conn)
-		puback := make([]byte, 4)
-		puback[0] = 0x40
-		puback[1] = 0x02
-		binary.BigEndian.PutUint16(puback[2:], 0xFFFF) // wrong ID
-		_, _ = conn.Write(puback)
 	}()
 	return mb
 }
@@ -1248,7 +1253,6 @@ func TestWriteConnectPacket_WithCredentials(t *testing.T) {
 	if data[0] != 0x10 {
 		t.Errorf("expected CONNECT fixed header 0x10, got 0x%02x", data[0])
 	}
-	// The packet should contain the username string somewhere
 	if !bytes.Contains(data, []byte("user1")) {
 		t.Error("expected packet to contain username")
 	}
@@ -1258,7 +1262,6 @@ func TestWriteConnectPacket_WithCredentials(t *testing.T) {
 }
 
 func TestWriteConnectPacket_WriteError(t *testing.T) {
-	// Use an io.Writer that always returns an error
 	w := &errWriter{err: errors.New("write failed")}
 	cfg := Config{ClientID: "test"}
 	err := writeConnectPacket(w, cfg)
@@ -1277,7 +1280,7 @@ func (e *errWriter) Write(_ []byte) (int, error) {
 }
 
 // ---------------------------------------------------------------------------
-// Unit tests: packetID wrapping
+// Unit tests: packetID wrapping on QoS 1
 // ---------------------------------------------------------------------------
 
 func TestPacketID_Wrapping(t *testing.T) {
@@ -1290,7 +1293,7 @@ func TestPacketID_Wrapping(t *testing.T) {
 	}
 	defer s.Close()
 
-	// Force packetID to wrap around
+	// Force packetID to 0xFFFE so next send uses 0xFFFF
 	s.mu.Lock()
 	s.packetID = 0xFFFE
 	s.mu.Unlock()
@@ -1300,12 +1303,14 @@ func TestPacketID_Wrapping(t *testing.T) {
 		t.Fatalf("Send at 0xFFFF: %v", err)
 	}
 
-	// Next increment should wrap to 1 (skipping 0)
-	s.mu.Lock()
-	s.packetID = 0xFFFF
-	s.mu.Unlock()
-
+	// packetID is now 0xFFFF; next increment wraps to 1 (skipping 0)
 	if err := s.Send(context.Background(), cmd); err != nil {
 		t.Fatalf("Send after wrap: %v", err)
+	}
+
+	// Verify both messages were received
+	records := mb.waitForPublishes(2, 500*time.Millisecond)
+	if len(records) != 2 {
+		t.Fatalf("expected 2 payloads, got %d", len(records))
 	}
 }
