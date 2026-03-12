@@ -37,7 +37,7 @@ mod:
 test: unit-test cucumber-test
 
 unit-test:
-	$(GO) test $(PKGS)
+	$(GO) test -race $(PKGS)
 
 cucumber-test:
 	$(GO) test ./internal/api -run TestFeatures -v
