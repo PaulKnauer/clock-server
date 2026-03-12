@@ -124,11 +124,11 @@ func (mb *mockBroker) handleConn(conn net.Conn) {
 		return
 
 	case behaviorCloseOnPublish:
-		// Read CONNECT, send CONNACK, then close immediately.
-		// The client will get a connection reset when it tries to write the PUBLISH.
-		_ = readRawMQTTPacket(conn)
+		// Read CONNECT, send CONNACK, read PUBLISH, then RST-close so the client's
+		// PUBACK read (QoS 1) immediately gets a connection-reset error.
+		_ = readRawMQTTPacket(conn) // CONNECT
 		_, _ = conn.Write([]byte{0x20, 0x02, 0x00, 0x00})
-		// Force a TCP RST by setting linger=0 before closing
+		_ = readRawMQTTPacket(conn) // PUBLISH (consume it, don't send PUBACK)
 		if tc, ok := conn.(*net.TCPConn); ok {
 			_ = tc.SetLinger(0)
 		}
