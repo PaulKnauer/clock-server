@@ -887,16 +887,19 @@ func TestSend_CancelledContext(t *testing.T) {
 }
 
 func TestSend_PublishFailureThenReconnectWithRetry(t *testing.T) {
-	// Broker sends CONNACK then closes — all reconnect attempts will also get RST.
+	// Broker reads CONNECT+PUBLISH then RST-closes, so the QoS-1 PUBACK read fails.
+	// With ConnectRetry=true the sender retries 3 times; all will fail.
 	mb := newMockBroker(t, behaviorCloseOnPublish)
 	defer mb.close()
 
 	s, err := newSenderWithBroker(t, mb, func(c *Config) {
 		c.ConnectRetry = true
+		c.QoS = 1
 	})
 	if err != nil {
 		t.Fatalf("NewSender: %v", err)
 	}
+	s.pubTimeout = 500 * time.Millisecond
 	defer s.Close()
 
 	cmd := domain.SetBrightnessCommand{DeviceID: "dev-1", Level: 50}
