@@ -28,7 +28,7 @@ const (
 	behaviorInvalidConnAck                       // send garbage instead of CONNACK
 	behaviorCloseOnConnect                       // close connection immediately without sending anything
 	behaviorAcceptNoPubAck                       // send valid CONNACK but never send PUBACK (causes timeout on QoS 1)
-	behaviorCloseOnPublish                       // accept connection, send CONNACK, then immediately close so publish write fails
+	behaviorCloseOnPublish                       // accept connection, send CONNACK, read PUBLISH, then RST-close (PUBACK read fails)
 )
 
 // mockBroker is a simple in-process TCP listener that behaves like a minimal MQTT broker.
