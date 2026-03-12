@@ -12,6 +12,7 @@ build/
 *.test
 *.out
 coverage.out
+coverage.html
 cover.out
 .gocache/
 .gomodcache/
