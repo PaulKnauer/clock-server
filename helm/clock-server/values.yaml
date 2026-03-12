@@ -83,6 +83,14 @@ auth:
     mqttPassword: MQTT_PASSWORD
     restToken: CLOCK_REST_TOKEN
 
+# Secret for downstream service credentials (MQTT password, REST token).
+# Set existingSecret to use a pre-created Secret instead of the chart-managed one.
+downstream:
+  existingSecret: ""
+  secretKeys:
+    mqttPassword: MQTT_PASSWORD
+    restToken: CLOCK_REST_TOKEN
+
 config:
   httpAddr: ":8080"
   requireTLS: true

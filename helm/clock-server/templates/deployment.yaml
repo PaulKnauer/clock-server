@@ -72,8 +72,8 @@ spec:
             - name: MQTT_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "clock-server.authSecretName" . }}
-                  key: {{ .Values.auth.secretKeys.mqttPassword }}
+                  name: {{ include "clock-server.downstreamSecretName" . }}
+                  key: {{ .Values.downstream.secretKeys.mqttPassword }}
                   optional: true
             - name: MQTT_TOPIC_PREFIX
               value: {{ .Values.config.mqtt.topicPrefix | quote }}
@@ -94,8 +94,8 @@ spec:
             - name: CLOCK_REST_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "clock-server.authSecretName" . }}
-                  key: {{ .Values.auth.secretKeys.restToken }}
+                  name: {{ include "clock-server.downstreamSecretName" . }}
+                  key: {{ .Values.downstream.secretKeys.restToken }}
                   optional: true
             - name: CLOCK_REST_TIMEOUT_MS
               value: {{ .Values.config.rest.timeoutMs | quote }}
