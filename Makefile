@@ -33,11 +33,16 @@ fmt:
 mod:
 	$(GO) mod tidy
 
-.PHONY: test unit-test cucumber-test
+.PHONY: test unit-test cucumber-test coverage
 test: unit-test cucumber-test
 
 unit-test:
 	$(GO) test -coverprofile=coverage.out $(PKGS)
+
+coverage:
+	$(GO) test -coverprofile=coverage.out $(PKGS) && \
+	$(GO) tool cover -html=coverage.out -o coverage.html && \
+	$(GO) tool cover -func=coverage.out
 
 cucumber-test:
 	$(GO) test ./internal/api -run TestFeatures -v
