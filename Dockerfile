@@ -11,7 +11,7 @@ WORKDIR /src
 ARG TARGETOS
 ARG TARGETARCH
 
-COPY go.mod ./
+COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
