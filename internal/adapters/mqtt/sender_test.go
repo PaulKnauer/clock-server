@@ -1220,7 +1220,7 @@ func TestReadPubAck_PacketIDMismatch(t *testing.T) {
 	buf := make([]byte, 4)
 	buf[0] = 0x40
 	buf[1] = 0x02
-	binary.BigEndian.PutUint16(buf[2:], 5) // actual ID = 5
+	binary.BigEndian.PutUint16(buf[2:], 5)      // actual ID = 5
 	err := readPubAck(bytes.NewReader(buf), 99) // expected ID = 99
 	if err == nil {
 		t.Fatal("expected packet ID mismatch error")
