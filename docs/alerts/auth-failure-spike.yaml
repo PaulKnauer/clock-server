@@ -1,0 +1,54 @@
+# PrometheusRule: Auth Failure Spike
+#
+# Fires when the rate of authentication failures exceeds 10 per minute
+# averaged over a 5-minute window.  This pattern typically indicates:
+#   - A credential-stuffing or brute-force attack
+#   - A misconfigured client rotating to a bad token
+#   - An API key that has been revoked but not yet updated in callers
+#
+# Tuning guidance:
+#   - Raise the threshold (10/min) in low-traffic environments where even
+#     a handful of failures is significant.
+#   - Lower it (e.g. 2/min) in high-security deployments where any
+#     unexpected failure spike should page.
+#   - The 5-minute window smooths over transient bursts (e.g. a single
+#     misconfigured client retrying rapidly).  Shorten to 1m for faster
+#     detection at the cost of more noise.
+#   - Add label matchers (e.g. namespace, cluster) to scope the alert
+#     to a specific environment.
+#
+# Prerequisites:
+#   - clock-server /metrics endpoint scraped by Prometheus
+#   - Prometheus Operator (or equivalent) deployed in the cluster
+#   - A matching ruleSelector on the Prometheus CR, e.g.:
+#       ruleSelector:
+#         matchLabels:
+#           app.kubernetes.io/name: clock-server
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: clock-server-auth-failure-spike
+  labels:
+    app.kubernetes.io/name: clock-server
+    # Add additional labels here to match your Prometheus ruleSelector.
+spec:
+  groups:
+    - name: clock-server.auth
+      interval: 1m
+      rules:
+        - alert: ClockServerAuthFailureSpike
+          # Fire when auth failure rate exceeds 10 per minute over the last 5 minutes.
+          expr: |
+            rate(clock_auth_failures_total[5m]) * 60 > 10
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High authentication failure rate on clock-server"
+            description: >
+              clock-server is recording more than 10 authentication failures per minute
+              (5-minute average: {{ $value | printf "%.1f" }}/min).
+              This may indicate a brute-force attempt, a misconfigured client, or
+              a revoked token still in use.
+            runbook_url: "https://example.com/runbooks/clock-server-auth-failures"

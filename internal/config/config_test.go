@@ -177,13 +177,14 @@ func TestLoadFromEnvParsesCredentialScopes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if len(cfg.AuthCredentials) != 1 {
-		t.Fatalf("expected one credential, got %d", len(cfg.AuthCredentials))
+	creds := cfg.AuthCredentials.Load()
+	if len(creds) != 1 {
+		t.Fatalf("expected one credential, got %d", len(creds))
 	}
-	if cfg.AuthCredentials[0].ID != "ops" {
-		t.Fatalf("unexpected id: %s", cfg.AuthCredentials[0].ID)
+	if creds[0].ID != "ops" {
+		t.Fatalf("unexpected id: %s", creds[0].ID)
 	}
-	if !cfg.AuthCredentials[0].Allows("clock-12") {
+	if !creds[0].Allows("clock-12") {
 		t.Fatal("expected scope to allow clock-12")
 	}
 }

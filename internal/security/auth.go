@@ -3,6 +3,7 @@ package security
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 )
 
 // Credential represents an API credential identity with scoped device access.
@@ -32,6 +33,34 @@ func (c Credential) Allows(deviceID string) bool {
 		}
 	}
 	return false
+}
+
+// CredentialStore holds a credential slice that can be atomically replaced.
+// All reads are lock-free; Replace performs a single atomic pointer swap
+// so there is never a window where zero credentials are valid.
+type CredentialStore struct {
+	ptr atomic.Pointer[[]Credential]
+}
+
+// NewCredentialStore creates a CredentialStore pre-loaded with the given credentials.
+func NewCredentialStore(creds []Credential) *CredentialStore {
+	cs := &CredentialStore{}
+	cs.ptr.Store(&creds)
+	return cs
+}
+
+// Load returns the current credential slice. Safe for concurrent use.
+func (cs *CredentialStore) Load() []Credential {
+	p := cs.ptr.Load()
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+// Replace atomically swaps the entire credential set. Safe for concurrent use.
+func (cs *CredentialStore) Replace(creds []Credential) {
+	cs.ptr.Store(&creds)
 }
 
 // ParseCredentials parses semicolon-separated credentials in the format:

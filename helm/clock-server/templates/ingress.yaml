@@ -5,10 +5,13 @@ metadata:
   name: {{ include "clock-server.fullname" . }}
   labels:
     {{- include "clock-server.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
   annotations:
+    {{- if .Values.rateLimit.traefik.enabled }}
+    traefik.ingress.kubernetes.io/router.middlewares: {{ .Release.Namespace }}-{{ include "clock-server.fullname" . }}-ratelimit@kubernetescrd
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- end }}
 spec:
   {{- with .Values.ingress.className }}
   ingressClassName: {{ . }}

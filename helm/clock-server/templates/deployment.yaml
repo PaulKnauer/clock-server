@@ -61,6 +61,8 @@ spec:
               value: {{ .Values.config.maxBodyBytes | quote }}
             - name: AUTH_FAIL_LIMIT_PER_MIN
               value: {{ .Values.config.authFailLimitPerMin | quote }}
+            - name: METRICS_REQUIRE_AUTH
+              value: {{ .Values.config.metricsRequireAuth | quote }}
             - name: ENABLED_SENDERS
               value: {{ .Values.config.enabledSenders | quote }}
             - name: MQTT_BROKER_URL

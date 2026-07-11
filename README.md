@@ -25,6 +25,7 @@ Detailed per-subproject references live in the `docs/` directory:
 |---|---|
 | [docs/server.md](docs/server.md) | `cmd/server` entrypoint and all `internal/` packages (domain, application, adapters, API, config, bootstrap, security) |
 | [docs/clockctl.md](docs/clockctl.md) | `cmd/clockctl` CLI client — commands, flags, env vars, and examples |
+| [docs/lcd-reference.md](docs/lcd-reference.md) | LCD clock device integration reference — device feature set, MQTT command contract, and proposed device event topics |
 | [docs/helm.md](docs/helm.md) | Helm chart (`helm/clock-server`) — values reference, templates, security posture, ingress, and secrets |
 | [docs/docker.md](docs/docker.md) | Dockerfile multi-stage build, Docker Compose integration test stack, and Mosquitto sidecar config |
 | [docs/dagger.md](docs/dagger.md) | Dagger CI/CD pipeline (`.dagger/`) — module overview and pipeline functions |

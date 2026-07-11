@@ -1,3 +1,40 @@
+# ---------------------------------------------------------------------------
+# credentials — rotation policy
+#
+# Recommended maximum rotation interval: 90 days.
+# Rotate immediately if a credential is suspected of being compromised.
+#
+# Zero-downtime rotation procedure:
+#   1. Update the API_AUTH_CREDENTIALS Kubernetes Secret with the new value.
+#   2. Send SIGHUP to PID 1 in each pod:
+#        kubectl exec <pod> -- kill -HUP 1
+#   3. Verify: kubectl logs <pod> | grep "credentials reloaded"
+#
+# Alternative: rolling restart via:
+#        kubectl rollout restart deployment/clock-server
+#
+# See docs/runbooks/credential-rotation.md for the full procedure.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# replicaCount — horizontal scaling note
+#
+# When replicaCount > 1, the in-memory auth failure rate limiter is per-replica.
+# Each pod independently tracks failed authentication attempts. An attacker that
+# distributes requests across replicas can exceed the per-minute failure limit on
+# each individual pod without being blocked cluster-wide.
+#
+# To enforce cluster-wide rate limiting for external traffic, enable Traefik
+# ingress-layer rate limiting:
+#
+#   rateLimit:
+#     traefik:
+#       enabled: true
+#
+# See docs/adr/0001-rate-limiting-strategy.md for the full architectural decision.
+# The in-memory limiter remains active as defence-in-depth for direct pod access
+# and intra-cluster traffic regardless of this setting.
+# ---------------------------------------------------------------------------
 replicaCount: 1
 
 image:
@@ -98,6 +135,7 @@ config:
   readinessRequireAuth: false
   maxBodyBytes: 65536
   authFailLimitPerMin: 60
+  metricsRequireAuth: false
 
   httpReadTimeoutMs: 10000
   httpWriteTimeoutMs: 10000
@@ -124,3 +162,152 @@ config:
     timeoutMs: 5000
     healthPath: ""
     allowInsecureHTTP: false
+
+# ---------------------------------------------------------------------------
+# logging — audit log shipping (Fluent Bit sidecar pattern)
+#
+# clock-server writes one JSON audit-log line per request to stderr.
+# To ship these logs to a centralised store (Loki, Elasticsearch, Splunk …)
+# add a Fluent Bit sidecar that reads from the shared log volume and forwards
+# to your backend.
+#
+# Quick-start (enable by removing the leading '#' from each line below and
+# setting logging.fluentbit.enabled: true):
+#
+# logging:
+#   fluentbit:
+#     enabled: false          # set to true to inject the sidecar
+#     image: fluent/fluent-bit:3.3
+#     # Fluent Bit INPUT reads log lines written by the app container.
+#     # OUTPUT and FILTER sections are environment-specific — configure them
+#     # in a ConfigMap or via the extraConfig field below.
+#     extraConfig: ""
+#
+# Pod annotation (added automatically when fluentbit.enabled=true):
+#   fluentbit.io/parser: json
+#
+# The annotation tells a cluster-level Fluent Bit DaemonSet (if present) to
+# parse this pod's logs as JSON.  It is safe to set even when the sidecar
+# approach is used instead.
+#
+# See docs/runbooks/audit-log-retention.md for retention policy guidance.
+# ---------------------------------------------------------------------------
+logging:
+  fluentbit:
+    enabled: false
+
+# ---------------------------------------------------------------------------
+# metrics — Prometheus scraping configuration
+#
+# clock-server exposes a /metrics endpoint in Prometheus text format.
+# By default the endpoint requires no authentication. Set metricsRequireAuth
+# to true in the config block above to protect it with bearer auth.
+#
+# ServiceMonitor is off by default. Enable it when the Prometheus Operator
+# is present in your cluster.
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# tls — TLS certificate configuration
+#
+# cert-manager integration is disabled by default. When enabled, a cert-manager
+# Certificate resource is created. The resulting secret (tls.certManager.secretName)
+# should be mounted into the pod and referenced via TLS_CERT_FILE / TLS_KEY_FILE.
+# ---------------------------------------------------------------------------
+tls:
+  certManager:
+    enabled: false
+    issuerRef:
+      name: letsencrypt-prod
+      kind: ClusterIssuer
+    duration: 2160h   # 90 days
+    renewBefore: 720h # 30 days
+    secretName: clock-server-tls
+
+# ---------------------------------------------------------------------------
+# networkPolicy — Kubernetes NetworkPolicy for egress restriction
+#
+# PREREQUISITE: the cluster CNI must support NetworkPolicy enforcement.
+# Common supported CNIs: Calico, Cilium, Weave Net, Antrea.
+# Flannel does NOT enforce NetworkPolicy by default.
+#
+# When enabled, the policy:
+#   - Allows ingress only from the configured ingress controller namespace.
+#   - Allows egress to DNS (UDP+TCP 53), the MQTT broker, and the REST downstream.
+#   - Denies all other ingress and egress implicitly.
+#
+# Enable at install/upgrade time:
+#   helm upgrade --install clock-server . --set networkPolicy.enabled=true
+# ---------------------------------------------------------------------------
+networkPolicy:
+  # enabled — set to true to create the NetworkPolicy resource.
+  # Requires a CNI that enforces NetworkPolicy (Calico, Cilium, etc.).
+  enabled: false
+
+  # ingressNamespaceSelector — namespaceSelector used to identify the ingress
+  # controller namespace. Only pods in a namespace matching these labels may
+  # send inbound traffic to clock-server.
+  # Adjust matchLabels if your ingress controller runs in a different namespace.
+  ingressNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: traefik
+
+  # mqttEgressPort — TCP port used to reach the MQTT broker.
+  # Use 8883 for MQTTS (TLS), 1883 for plain MQTT.
+  mqttEgressPort: 8883
+
+  # restEgressPort — TCP port used to reach the REST downstream service.
+  # Use 443 for HTTPS (recommended), 80 for plain HTTP.
+  restEgressPort: 443
+
+metrics:
+  serviceMonitor:
+    # enabled — set to true to create a ServiceMonitor resource for Prometheus Operator.
+    enabled: false
+    # interval — how often Prometheus scrapes the endpoint (e.g. "30s").
+    interval: "30s"
+    # scrapeTimeout — timeout for each scrape (must be <= interval).
+    scrapeTimeout: "10s"
+    # namespace — override the namespace in which the ServiceMonitor is created.
+    # Defaults to the release namespace when empty.
+    namespace: ""
+    # additionalLabels — extra labels added to the ServiceMonitor metadata,
+    # used to match Prometheus Operator's serviceMonitorSelector.
+    additionalLabels: {}
+    # bearerTokenSecret — optional Kubernetes secret reference for bearer token auth.
+    # Required only when config.metricsRequireAuth is true.
+    # Example:
+    #   bearerTokenSecret:
+    #     name: clock-server-metrics-token
+    #     key: token
+    bearerTokenSecret: {}
+
+# ---------------------------------------------------------------------------
+# rateLimit — Traefik ingress-layer rate limiting
+#
+# When rateLimit.traefik.enabled=true, a Traefik Middleware CRD is created and
+# the Ingress resource is annotated to apply it via:
+#   traefik.ingress.kubernetes.io/router.middlewares
+#
+# This provides cluster-wide rate limiting for all traffic passing through the
+# Traefik ingress controller. Traffic that bypasses the ingress (e.g., direct
+# pod access via kubectl port-forward) is NOT subject to this limit; the
+# in-memory per-replica rate limiter in the application continues to handle
+# those cases.
+#
+# average — sustained request rate (requests per period). Default: 60.
+# period  — rolling window duration for the average. Default: "1m".
+# burst   — maximum number of requests allowed to exceed the average in a
+#           short burst. Default: 10.
+#
+# Requires: Traefik v2+ as the ingress controller with the Middleware CRD installed.
+# See: https://doc.traefik.io/traefik/middlewares/http/ratelimit/
+# ---------------------------------------------------------------------------
+rateLimit:
+  average: 60
+  period: "1m"
+  burst: 10
+  traefik:
+    # enabled — set to true to create the Traefik Middleware resource and
+    # annotate the Ingress to apply it. Requires ingress.enabled=true and
+    # Traefik v2+ as the ingress controller.
+    enabled: false

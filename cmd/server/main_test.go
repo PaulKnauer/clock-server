@@ -1,13 +1,109 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
+	"log"
+	"math/big"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 )
+
+// generateSelfSignedCert creates a self-signed RSA certificate valid between notBefore and notAfter.
+func generateSelfSignedCert(t *testing.T, notBefore, notAfter time.Time) *x509.Certificate {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate RSA key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test"},
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatalf("parse certificate: %v", err)
+	}
+	return cert
+}
+
+func TestCheckCertExpiryExpired(t *testing.T) {
+	now := time.Now()
+	cert := generateSelfSignedCert(t, now.Add(-48*time.Hour), now.Add(-1*time.Hour))
+	warn, err := checkCertExpiry(cert, now)
+	if err == nil {
+		t.Fatal("expected error for expired cert, got nil")
+	}
+	if !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("expected 'expired' in error, got: %v", err)
+	}
+	if warn {
+		t.Fatal("expected warn=false when cert is already expired")
+	}
+}
+
+func TestCheckCertExpiryWarningSoon(t *testing.T) {
+	now := time.Now()
+	cert := generateSelfSignedCert(t, now.Add(-24*time.Hour), now.Add(15*24*time.Hour))
+	warn, err := checkCertExpiry(cert, now)
+	if err != nil {
+		t.Fatalf("expected no error for soon-expiring cert, got: %v", err)
+	}
+	if !warn {
+		t.Fatal("expected warn=true for cert expiring in 15 days")
+	}
+}
+
+func TestCheckCertExpiryValid(t *testing.T) {
+	now := time.Now()
+	cert := generateSelfSignedCert(t, now.Add(-24*time.Hour), now.Add(90*24*time.Hour))
+	warn, err := checkCertExpiry(cert, now)
+	if err != nil {
+		t.Fatalf("expected no error for valid cert, got: %v", err)
+	}
+	if warn {
+		t.Fatal("expected warn=false for cert expiring in 90 days")
+	}
+}
+
+func TestCheckCertExpiryWarnLogged(t *testing.T) {
+	// Verify that main-level code would log a warning for a near-expiry cert.
+	// We test checkCertExpiry directly and confirm the warn flag triggers logging.
+	var buf bytes.Buffer
+	logger := log.New(&buf, "", 0)
+
+	now := time.Now()
+	cert := generateSelfSignedCert(t, now.Add(-24*time.Hour), now.Add(15*24*time.Hour))
+	warn, err := checkCertExpiry(cert, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if warn {
+		daysLeft := int(time.Until(cert.NotAfter).Hours() / 24)
+		logger.Printf("WARNING: TLS certificate expires in %d days; renew soon", daysLeft)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "WARNING") {
+		t.Fatalf("expected WARNING in log output, got: %q", output)
+	}
+	if !strings.Contains(output, "renew soon") {
+		t.Fatalf("expected 'renew soon' in log output, got: %q", output)
+	}
+}
 
 type fakeHTTPServer struct {
 	listenAndServeFn    func() error

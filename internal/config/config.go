@@ -29,7 +29,8 @@ type Config struct {
 	ReadinessRequireAuth bool
 	MaxBodyBytes         int64
 	AuthFailLimitPerMin  int
-	AuthCredentials      []security.Credential
+	MetricsRequireAuth   bool
+	AuthCredentials      *security.CredentialStore
 	EnabledSenders       []string
 	MQTT                 mqtt.Config
 	REST                 rest.Config
@@ -51,6 +52,7 @@ func LoadFromEnv() (Config, error) {
 		ReadinessRequireAuth: parseBool("READINESS_REQUIRE_AUTH", true),
 		MaxBodyBytes:         int64(mustIntInRange("MAX_BODY_BYTES", 65536, 1024, 10*1024*1024)),
 		AuthFailLimitPerMin:  mustIntInRange("AUTH_FAIL_LIMIT_PER_MIN", 60, 1, 10000),
+		MetricsRequireAuth:   parseBool("METRICS_REQUIRE_AUTH", false),
 		EnabledSenders: splitCSV(
 			getEnv("ENABLED_SENDERS", "mqtt,rest"),
 		),
@@ -87,7 +89,7 @@ func LoadFromEnv() (Config, error) {
 	if len(creds) == 0 {
 		return Config{}, fmt.Errorf("API_AUTH_CREDENTIALS or API_AUTH_TOKEN is required")
 	}
-	cfg.AuthCredentials = creds
+	cfg.AuthCredentials = security.NewCredentialStore(creds)
 
 	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
 		return Config{}, fmt.Errorf("TLS_CERT_FILE and TLS_KEY_FILE must both be set")

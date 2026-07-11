@@ -8,10 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,7 +19,9 @@ import (
 
 	"github.com/paul/clock-server/internal/application"
 	"github.com/paul/clock-server/internal/domain"
+	"github.com/paul/clock-server/internal/metrics"
 	"github.com/paul/clock-server/internal/security"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 const defaultBodyLimit = 64 * 1024
@@ -33,25 +35,48 @@ const (
 // Handler exposes REST endpoints for issuing smart clock commands.
 type Handler struct {
 	dispatcher             *application.CommandDispatcher
-	credentials            []security.Credential
+	credentials            *security.CredentialStore
 	trustProxyTLS          bool
 	requireTLS             bool
 	readinessRequireAuth   bool
+	metricsRequireAuth     bool
 	maxBodyBytes           int64
 	authFailureRateLimiter *authFailureLimiter
 	requestCounter         uint64
 	checkers               []application.ReadinessChecker
+	metrics                *metrics.Metrics
+}
+
+// HandlerOptions holds optional configuration for the Handler.
+type HandlerOptions struct {
+	Metrics            *metrics.Metrics
+	MetricsRequireAuth bool
 }
 
 // NewHandler builds a new API handler.
 func NewHandler(
 	dispatcher *application.CommandDispatcher,
-	credentials []security.Credential,
+	credentials *security.CredentialStore,
 	trustProxyTLS bool,
 	requireTLS bool,
 	readinessRequireAuth bool,
 	maxBodyBytes int64,
 	authFailLimitPerMinute int,
+	checkers ...application.ReadinessChecker,
+) *Handler {
+	return NewHandlerWithOptions(dispatcher, credentials, trustProxyTLS, requireTLS, readinessRequireAuth, maxBodyBytes, authFailLimitPerMinute, HandlerOptions{}, checkers...)
+}
+
+// NewHandlerWithOptions builds a new API handler with extra options (e.g. metrics).
+func NewHandlerWithOptions(
+	dispatcher *application.CommandDispatcher,
+	credentials *security.CredentialStore,
+	trustProxyTLS bool,
+	requireTLS bool,
+	readinessRequireAuth bool,
+	maxBodyBytes int64,
+	authFailLimitPerMinute int,
+	opts HandlerOptions,
 	checkers ...application.ReadinessChecker,
 ) *Handler {
 	if maxBodyBytes <= 0 {
@@ -66,9 +91,11 @@ func NewHandler(
 		trustProxyTLS:          trustProxyTLS,
 		requireTLS:             requireTLS,
 		readinessRequireAuth:   readinessRequireAuth,
+		metricsRequireAuth:     opts.MetricsRequireAuth,
 		maxBodyBytes:           maxBodyBytes,
 		authFailureRateLimiter: newAuthFailureLimiter(authFailLimitPerMinute),
 		checkers:               checkers,
+		metrics:                opts.Metrics,
 	}
 }
 
@@ -80,7 +107,11 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("/commands/alarms", h.handleSetAlarm)
 	mux.HandleFunc("/commands/messages", h.handleDisplayMessage)
 	mux.HandleFunc("/commands/brightness", h.handleSetBrightness)
-	return h.authMiddleware(mux)
+	if h.metrics != nil {
+		metricsHandler := promhttp.HandlerFor(h.metrics.Registry(), promhttp.HandlerOpts{})
+		mux.Handle("/metrics", metricsHandler)
+	}
+	return h.metricsMiddleware(h.authMiddleware(mux))
 }
 
 type setAlarmRequest struct {
@@ -267,6 +298,31 @@ func setSecurityHeaders(w http.ResponseWriter) {
 	w.Header().Set("Pragma", "no-cache")
 }
 
+// statusRecorder wraps http.ResponseWriter to capture the status code written.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// metricsMiddleware wraps the handler to record clock_requests_total for each request.
+// The /metrics path itself is excluded from this instrumentation to avoid noise.
+func (h *Handler) metricsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h.metrics == nil || r.URL.Path == "/metrics" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		h.metrics.RequestsTotal.WithLabelValues(r.Method, r.URL.Path, strconv.Itoa(rec.status)).Inc()
+	})
+}
+
 func (h *Handler) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := sanitizeRequestID(r.Header.Get("X-Request-Id"))
@@ -291,6 +347,12 @@ func (h *Handler) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// /metrics is excluded from auth failure rate limiting; auth is optional based on config.
+		if r.URL.Path == "/metrics" && !h.metricsRequireAuth {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		remoteIP := clientIP(r)
 
 		authHeader := r.Header.Get("Authorization")
@@ -311,19 +373,35 @@ func (h *Handler) authMiddleware(next http.Handler) http.Handler {
 			rateLimitKey = remoteIP + ":" + hex.EncodeToString(hash[:4])
 		}
 
-		if h.authFailureRateLimiter.IsBlocked(rateLimitKey) {
+		// /metrics with auth required is exempt from rate limiting (not an auth failure signal)
+		isMetricsPath := r.URL.Path == "/metrics"
+
+		if !isMetricsPath && h.authFailureRateLimiter.IsBlocked(rateLimitKey) {
+			if h.metrics != nil {
+				h.metrics.AuthFailuresTotal.WithLabelValues("rate_limited").Inc()
+			}
 			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many auth failures"})
 			return
 		}
 
 		if token == "" {
-			h.authFailureRateLimiter.RecordFailure(rateLimitKey)
+			if !isMetricsPath {
+				h.authFailureRateLimiter.RecordFailure(rateLimitKey)
+			}
+			if h.metrics != nil {
+				h.metrics.AuthFailuresTotal.WithLabelValues("missing_token").Inc()
+			}
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
 		principal, ok := h.lookupCredential(token)
 		if !ok {
-			h.authFailureRateLimiter.RecordFailure(rateLimitKey)
+			if !isMetricsPath {
+				h.authFailureRateLimiter.RecordFailure(rateLimitKey)
+			}
+			if h.metrics != nil {
+				h.metrics.AuthFailuresTotal.WithLabelValues("invalid_token").Inc()
+			}
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
@@ -334,7 +412,7 @@ func (h *Handler) authMiddleware(next http.Handler) http.Handler {
 }
 
 func (h *Handler) lookupCredential(token string) (principal, bool) {
-	for _, cred := range h.credentials {
+	for _, cred := range h.credentials.Load() {
 		if subtle.ConstantTimeCompare([]byte(token), []byte(cred.Token)) == 1 {
 			return principal{ID: cred.ID, Devices: cred.Devices}, true
 		}
@@ -364,22 +442,6 @@ func (h *Handler) isSecureRequest(r *http.Request) bool {
 	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
 }
 
-func (h *Handler) audit(r *http.Request, deviceID, commandType, result string) {
-	principalID := "unknown"
-	if pr, ok := r.Context().Value(principalContextKey).(principal); ok {
-		principalID = pr.ID
-	}
-	log.Printf("audit principal=%s remote=%s method=%s path=%s device=%s command=%s result=%s request_id=%s",
-		principalID,
-		clientIP(r),
-		r.Method,
-		r.URL.Path,
-		deviceID,
-		commandType,
-		result,
-		sanitizeRequestID(r.Header.Get("X-Request-Id")),
-	)
-}
 
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))

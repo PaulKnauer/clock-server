@@ -32,7 +32,7 @@ func newTestHandler(sender application.ClockCommandSender) *Handler {
 	dispatcher := application.NewCommandDispatcher(sender)
 	return NewHandler(
 		dispatcher,
-		[]security.Credential{{ID: "test", Token: "test-token", Devices: []string{"*"}}},
+		security.NewCredentialStore([]security.Credential{{ID: "test", Token: "test-token", Devices: []string{"*"}}}),
 		false,
 		false,
 		true,
@@ -156,7 +156,7 @@ func TestDeviceScopeForbidden(t *testing.T) {
 	dispatcher := application.NewCommandDispatcher(&stubSender{})
 	h := NewHandler(
 		dispatcher,
-		[]security.Credential{{ID: "ops", Token: "scoped-token", Devices: []string{"clock-allowed"}}},
+		security.NewCredentialStore([]security.Credential{{ID: "ops", Token: "scoped-token", Devices: []string{"clock-allowed"}}}),
 		false,
 		false,
 		true,
@@ -179,7 +179,7 @@ func TestRoutesRequireTLS(t *testing.T) {
 	dispatcher := application.NewCommandDispatcher(&stubSender{})
 	h := NewHandler(
 		dispatcher,
-		[]security.Credential{{ID: "test", Token: "test-token", Devices: []string{"*"}}},
+		security.NewCredentialStore([]security.Credential{{ID: "test", Token: "test-token", Devices: []string{"*"}}}),
 		false,
 		true,
 		true,
@@ -201,7 +201,7 @@ func TestRoutesTrustProxyTLS(t *testing.T) {
 	dispatcher := application.NewCommandDispatcher(&stubSender{})
 	h := NewHandler(
 		dispatcher,
-		[]security.Credential{{ID: "test", Token: "test-token", Devices: []string{"*"}}},
+		security.NewCredentialStore([]security.Credential{{ID: "test", Token: "test-token", Devices: []string{"*"}}}),
 		true,
 		true,
 		true,
@@ -224,7 +224,7 @@ func TestReadyDoesNotRequireAuthWhenDisabled(t *testing.T) {
 	dispatcher := application.NewCommandDispatcher(&stubSender{})
 	h := NewHandler(
 		dispatcher,
-		[]security.Credential{{ID: "test", Token: "test-token", Devices: []string{"*"}}},
+		security.NewCredentialStore([]security.Credential{{ID: "test", Token: "test-token", Devices: []string{"*"}}}),
 		false,
 		false,
 		false,
@@ -245,7 +245,7 @@ func TestAuthFailureRateLimit(t *testing.T) {
 	dispatcher := application.NewCommandDispatcher(&stubSender{})
 	h := NewHandler(
 		dispatcher,
-		[]security.Credential{{ID: "test", Token: "test-token", Devices: []string{"*"}}},
+		security.NewCredentialStore([]security.Credential{{ID: "test", Token: "test-token", Devices: []string{"*"}}}),
 		false,
 		false,
 		true,
@@ -278,7 +278,7 @@ func TestSharedIPThrottlingDoesNotBlockOtherTokens(t *testing.T) {
 	validToken := "valid-secret-token"
 	h := NewHandler(
 		dispatcher,
-		[]security.Credential{{ID: "legit", Token: validToken, Devices: []string{"*"}}},
+		security.NewCredentialStore([]security.Credential{{ID: "legit", Token: validToken, Devices: []string{"*"}}}),
 		false,
 		false,
 		true,
@@ -371,7 +371,7 @@ func TestHealthEnforcesTLS(t *testing.T) {
 	dispatcher := application.NewCommandDispatcher(&stubSender{})
 	h := NewHandler(
 		dispatcher,
-		[]security.Credential{{ID: "test", Token: "test-token", Devices: []string{"*"}}},
+		security.NewCredentialStore([]security.Credential{{ID: "test", Token: "test-token", Devices: []string{"*"}}}),
 		false,
 		true, // requireTLS
 		true,

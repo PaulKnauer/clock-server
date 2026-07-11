@@ -41,7 +41,7 @@ type bddWorld struct {
 	sender *bddStubSender
 
 	handler               http.Handler
-	credentials           []security.Credential
+	credentials           *security.CredentialStore
 	trustProxyTLS         bool
 	requireTLS            bool
 	readinessRequireAuth  bool
@@ -60,7 +60,7 @@ type bddWorld struct {
 func (w *bddWorld) reset() {
 	w.sender = &bddStubSender{}
 	w.handler = nil
-	w.credentials = []security.Credential{{ID: "test", Token: "test-token", Devices: []string{"*"}}}
+	w.credentials = security.NewCredentialStore([]security.Credential{{ID: "test", Token: "test-token", Devices: []string{"*"}}})
 	w.trustProxyTLS = false
 	w.requireTLS = false
 	w.readinessRequireAuth = true
@@ -130,7 +130,7 @@ func (w *bddWorld) apiHandlerRateLimitsAuthFailures(limit int) {
 }
 
 func (w *bddWorld) apiHandlerAuthorizesOnlyDevice(deviceID string) {
-	w.credentials = []security.Credential{{ID: "ops", Token: "scoped-token", Devices: []string{deviceID}}}
+	w.credentials = security.NewCredentialStore([]security.Credential{{ID: "ops", Token: "scoped-token", Devices: []string{deviceID}}})
 	w.handler = nil
 }
 

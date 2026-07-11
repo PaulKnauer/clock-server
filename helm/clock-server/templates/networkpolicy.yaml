@@ -1,0 +1,43 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "clock-server.fullname" . }}
+  labels:
+    {{- include "clock-server.labels" . | nindent 4 }}
+spec:
+  # Target only clock-server pods using the standard selector labels.
+  podSelector:
+    matchLabels:
+      {{- include "clock-server.selectorLabels" . | nindent 6 }}
+  # Explicitly declare both directions so that unlisted traffic is denied.
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # Allow inbound traffic only from the ingress controller namespace
+    # (e.g. traefik or ingress-nginx). All other ingress is denied.
+    - from:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.ingressNamespaceSelector | nindent 12 }}
+
+  egress:
+    # DNS — required for Kubernetes service discovery.
+    # Without this, the pod cannot resolve cluster-internal or external hostnames.
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # MQTT broker egress (e.g. MQTTS on port 8883).
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.mqttEgressPort }}
+
+    # REST downstream egress (HTTPS on port 443 by default).
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.restEgressPort }}
+{{- end }}

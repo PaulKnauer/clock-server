@@ -1,0 +1,27 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "clock-server.fullname" . }}
+  labels:
+    {{- include "clock-server.labels" . | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.metrics.serviceMonitor.namespace }}
+  namespace: {{ . }}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "clock-server.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout | default "10s" }}
+      {{- if .Values.metrics.serviceMonitor.bearerTokenSecret }}
+      bearerTokenSecret:
+        {{- toYaml .Values.metrics.serviceMonitor.bearerTokenSecret | nindent 8 }}
+      {{- end }}
+{{- end }}
