@@ -1,36 +1,51 @@
 installation:
-  version: 6.0.4
+  version: 6.12.4
   installDate: 2026-03-12T12:57:27.562Z
-  lastUpdated: 2026-03-12T14:58:58.196Z
+  lastUpdated: 2026-11-02T15:45:34.700Z
+  installShims: false
 modules:
   - name: core
-    version: 6.0.4
+    version: 6.12.4
     installDate: 2026-03-12T12:57:26.690Z
-    lastUpdated: 2026-03-12T14:58:57.473Z
+    lastUpdated: 2026-11-02T15:45:34.696Z
     source: built-in
     npmPackage: null
     repoUrl: null
-  - name: bmb
-    version: 0.1.6
-    installDate: 2026-03-12T12:57:25.502Z
-    lastUpdated: 2026-03-12T14:58:57.821Z
-    source: external
-    npmPackage: bmad-builder
-    repoUrl: https://github.com/bmad-code-org/bmad-builder
   - name: bmm
-    version: 6.0.4
+    version: 6.12.4
     installDate: 2026-03-12T14:58:53.013Z
-    lastUpdated: 2026-03-12T14:58:57.821Z
+    lastUpdated: 2026-11-02T15:45:34.696Z
     source: built-in
     npmPackage: null
     repoUrl: null
   - name: tea
-    version: 1.6.0
+    version: v1.27.2
     installDate: 2026-03-12T14:58:54.908Z
-    lastUpdated: 2026-03-12T14:58:58.196Z
+    lastUpdated: 2026-11-02T15:45:34.697Z
     source: external
     npmPackage: bmad-method-test-architecture-enterprise
     repoUrl: https://github.com/bmad-code-org/bmad-method-test-architecture-enterprise
+    channel: pinned
+    sha: d99ad29c62697c152e3393351406686d5bcd323c
+  - name: bmad-loop
+    version: v0.13.2
+    installDate: 2026-11-02T15:45:34.653Z
+    lastUpdated: 2026-11-02T15:45:34.699Z
+    source: external
+    npmPackage: null
+    repoUrl: https://github.com/bmad-code-org/bmad-loop
+    channel: stable
+    sha: 4a5c45390ff46c0fc28d316004ffe0ed7c8eea60
+  - name: cis
+    version: v0.3.2
+    installDate: 2026-11-02T15:45:34.665Z
+    lastUpdated: 2026-11-02T15:45:34.700Z
+    source: external
+    npmPackage: bmad-creative-intelligence-suite
+    repoUrl: https://github.com/bmad-code-org/bmad-module-creative-intelligence-suite
+    channel: pinned
+    sha: 97298b22fee1c7e482710d3a8414adb5cfccccd9
 ides:
   - claude-code
   - codex
+  - hermes
